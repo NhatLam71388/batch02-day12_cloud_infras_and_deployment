@@ -1,48 +1,44 @@
 # ============================================================
-# Production Dockerfile — Multi-stage, non-root user
-# Build context = 06-lab-complete/ (chạy: docker compose up)
+# Multi-stage production Dockerfile
+# Stage 1: install deps → Stage 2: minimal runtime, non-root
 # ============================================================
 
-# Stage 1: Builder — cài packages
+# ── Stage 1: builder ────────────────────────────────────────
 FROM python:3.11-slim AS builder
-
 WORKDIR /build
 
-# gcc cần cho một số C-extension packages
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --user --timeout 120 --retries 10 -r requirements.txt
+# --prefix=/packages installs to /packages/lib/python3.11/site-packages/
+RUN pip install --no-cache-dir --prefix=/packages --timeout 120 --retries 10 -r requirements.txt
 
-
-# Stage 2: Runtime — image nhỏ, không có build tools
+# ── Stage 2: runtime ─────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
-# Non-root user (best practice)
-RUN groupadd -r agent && useradd -r -g agent -d /app -s /sbin/nologin agent
+# -m creates /home/agent automatically; no interactive shell
+RUN groupadd -r agent && useradd -r -g agent -m -s /sbin/nologin agent
 
 WORKDIR /app
 
-# Copy chỉ packages đã cài từ builder (không copy gcc, apt cache)
-COPY --from=builder /root/.local /home/agent/.local
+# Copy packages to system path — always found regardless of HOME
+COPY --from=builder /packages /usr/local/
 
-# Copy application code
+COPY start.py .
 COPY app/ ./app/
 
 RUN chown -R agent:agent /app
 
 USER agent
 
-ENV PATH=/home/agent/.local/bin:$PATH
 ENV PYTHONPATH=/app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-# Health check built into image
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "start.py"]

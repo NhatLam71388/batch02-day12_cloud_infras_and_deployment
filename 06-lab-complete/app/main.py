@@ -334,6 +334,11 @@ async def ask_agent(
     }))
 
     llm = get_llm_provider()
+    if llm is None:
+        raise HTTPException(
+            503,
+            "No LLM configured. Set OPENAI_API_KEY or GEMINI_API_KEY environment variable.",
+        )
 
     try:
         from app.tools import ALL_TOOLS

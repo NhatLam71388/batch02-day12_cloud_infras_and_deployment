@@ -1153,6 +1153,24 @@ POST /ask     (wrong key) → 401
 GET  /metrics (valid key) → 200 {"daily_cost_usd":0.0,"budget_used_pct":0.0,...}
 ```
 
+**Deploy Railway — kết quả (2026-06-12):**
+```
+URL: https://acceptable-hope-production-5a3c.up.railway.app
+Status: ● Online
+
+GET  /health  → 200 {"status":"ok","version":"2.0.0","environment":"staging","uptime_seconds":13.0,...}
+GET  /ready   → 200 {"ready":true,"uptime_seconds":27.4}
+POST /ask     (no key)    → 401 Unauthorized
+POST /ask     (wrong key) → 401 Unauthorized
+POST /ask     (valid key) → 503 "No LLM configured. Set OPENAI_API_KEY or GEMINI_API_KEY."
+  └─ 503 là expected: infra hoàn toàn hoạt động, chỉ cần thêm API key để LLM thật
+```
+
+**Root cause của Railway healthcheck failure trước đó (đã fix):**
+- Dockerfile CMD dùng `--port 8000` cố định, nhưng Railway set $PORT động (≠ 8000)
+- Fix: tạo `start.py` đọc `PORT` từ environment → truyền vào uvicorn programmatically
+- Multi-stage + non-root user vẫn giữ nguyên (pass 20/20 checks)
+
 **Điểm khác biệt quan trọng so với Day-3 gốc:**
 - Day-3 gốc: bind `127.0.0.1:8000`, không có auth, không có health check → không deploy được
 - Part 6: `0.0.0.0`, X-API-Key, sliding window rate limit, cost guard, `/health` + `/ready`, graceful shutdown, multi-stage Docker → deploy-ready
@@ -1166,7 +1184,7 @@ GET  /metrics (valid key) → 200 {"daily_cost_usd":0.0,"budget_used_pct":0.0,..
 | **Security** | 20 | ✅ X-API-Key auth (401), rate limit (429), cost guard |
 | **Reliability** | 20 | ✅ /health + /ready, lifespan graceful shutdown, SIGTERM handler |
 | **Scalability** | 15 | ✅ Stateless design (Redis URL), docker-compose với redis |
-| **Deployment** | 10 | ✅ railway.toml, code pushed to GitHub |
+| **Deployment** | 10 | ✅ Railway live: https://acceptable-hope-production-5a3c.up.railway.app |
 | **Total** | 100 | **100/100** |
 
 > **Ghi chú (2026-06-12):** `llama-cpp-python` (local Phi-3 GGUF model ~2GB) không được include vào Docker image vì quá lớn và cần gcc để compile. Production Docker chỉ hỗ trợ OpenAI + Gemini. Local model vẫn dùng được khi chạy trực tiếp trên máy nếu có `LOCAL_MODEL_PATH`.
