@@ -80,8 +80,9 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    # Ẩn server info
-    response.headers.pop("server", None)
+    # Ẩn server info (MutableHeaders không có .pop — dùng del)
+    if "server" in response.headers:
+        del response.headers["server"]
     return response
 
 

@@ -544,12 +544,66 @@ def check_budget(user_id: str, estimated_cost: float) -> bool:
 
 </details>
 
+###  Exercise 4.1 — Trả lời
+
+- **API key được check ở đâu?** FastAPI `Depends(verify_api_key)` trong decorator của từng endpoint — framework tự inject trước khi handler chạy. Key so sánh với `os.getenv("AGENT_API_KEY")`.
+- **Nếu sai key:** trả 401 Unauthorized (không có header) hoặc 403 Forbidden (có header nhưng sai giá trị).
+- **Rotate key:** Đổi biến môi trường `AGENT_API_KEY` và restart service — không cần sửa code.
+
+**Kết quả test thực tế (2026-06-12):**
+```
+POST /ask  (no header)          → 401 {"detail":"X-API-Key header missing"}
+POST /ask  X-API-Key: wrong     → 403 {"detail":"Invalid API key"}
+POST /ask  X-API-Key: secret-key-123 → 200 {"answer":"..."}
+```
+
+###  Exercise 4.2 — JWT Flow
+
+**Kết quả test thực tế (2026-06-12):**
+```
+# Lấy token:
+POST /auth/token {"username":"student","password":"demo123"}
+→ {"access_token":"eyJ...","token_type":"bearer","expires_in_minutes":60}
+
+# Dùng token:
+POST /ask  Authorization: Bearer eyJ...
+→ {"question":"...","answer":"...","usage":{"requests_remaining":9,...}}
+```
+JWT flow: `login → HS256 sign (username+role+exp) → client lưu token → gửi trong header mỗi request → server verify signature + exp → extract username/role`.
+
+###  Exercise 4.3 — Rate Limiting
+
+- **Algorithm:** **Sliding Window Counter** — `rate_limiter.py` dùng list timestamps trong Redis (`ZADD` + `ZREMRANGEBYSCORE`). Sliding chính xác hơn Fixed Window vì không bị "burst đôi" ở biên phút.
+- **Limit:** user thường = **10 req/min**; admin/teacher = **100 req/min**.
+- **Bypass cho admin:** `Depends(verify_token)` extract `role` từ JWT, sau đó chọn `rate_limiter_admin` (limit cao hơn) thay vì `rate_limiter_user`.
+
+**Kết quả test thực tế:**
+```
+Request 1-10  → 200 OK (requests_remaining: 9, 8, ... 0)
+Request 11    → 429 {"detail":"Rate limit exceeded. Retry after 58s"}
+               Header: Retry-After: 58
+```
+
+###  Exercise 4.4 — Cost Guard
+
+`cost_guard.py` đã implement sẵn — đọc và quan sát:
+- Mỗi user có budget **$1/ngày** (`user_daily_budget_usd = 1.0`); global **$10/ngày**.
+- Token = số từ × 2 (mock estimate). Giá: $0.002/1K input token + $0.006/1K output token.
+- Khi vượt budget → raise 402 Payment Required.
+- `/me/usage` xem usage; `/admin/stats` xem global (admin only → 403 nếu không đúng role).
+
 ###  Checkpoint 4
 
-- [ ] Implement API key authentication
-- [ ] Hiểu JWT flow
-- [ ] Implement rate limiting
-- [ ] Implement cost guard với Redis
+- [x] Implement API key authentication — đã test: 401 (no key), 403 (wrong key), 200 (valid key); xem `04-api-gateway/develop/app.py`
+- [x] Hiểu JWT flow — login → HS256 token (60 min) → Bearer header → verify_token dependency; xem `04-api-gateway/production/auth.py`
+- [x] Implement rate limiting — Sliding Window Counter, 10 req/min user / 100 admin; test 11 requests → request 11 nhận 429 + Retry-After header; xem `rate_limiter.py`
+- [x] Implement cost guard với Redis — $1/day per user, $10/day global, token counting, 402 khi vượt; đã test `/me/usage` và `/admin/stats`; xem `cost_guard.py`
+
+> **Ghi chú khi thực hành (2026-06-12):**
+> - Bug lab: `app.py` line 84 dùng `response.headers.pop("server", None)` — `MutableHeaders` không có `.pop()` → `AttributeError`. Fix: `if "server" in response.headers: del response.headers["server"]`.
+> - Chạy bằng lệnh `python app.py` trong venv, chú ý `ENVIRONMENT` phải **không** là `"production"` để `/docs` hiển thị.
+> - Rate limit reset sau 60s sliding window — test lại bằng cách đợi 1 phút hoặc dùng `teacher/teach456` (100 req/min).
+> - Security headers thêm vào mọi response: `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`.
 
 ---
 
@@ -716,13 +770,96 @@ Script này:
 2. Kill random instance
 3. Gọi tiếp — conversation vẫn còn không?
 
+###  Exercise 5.1 — Health checks
+
+**Kết quả test thực tế (2026-06-12):**
+```
+GET /health → 200 {"status":"ok","instance_id":"instance-3af854","uptime_seconds":12.4,"storage":"redis","redis_connected":true}
+GET /ready  → 200 {"ready":true,"instance":"instance-3af854"}
+             (nếu Redis down → 503 "Redis not available")
+```
+
+Phân biệt **liveness** vs **readiness**: `/health` đơn giản — process còn sống không? → platform restart nếu 503. `/ready` nghiêm ngặt hơn — check Redis ping, đảm bảo instance thật sự xử lý được request → load balancer tạm không route vào nếu 503 (ví dụ: đang khởi động, đang nạp model).
+
+###  Exercise 5.2 — Graceful Shutdown
+
+`app.py` dùng **FastAPI lifespan** (asynccontextmanager) thay vì `signal.signal`:
+```python
+@asynccontextmanager
+async def lifespan(app):
+    logger.info(f"Starting {INSTANCE_ID}")
+    yield                              # ← app chạy ở đây
+    logger.info(f"Shutting down {INSTANCE_ID}")   # ← SIGTERM → chạy phần này
+```
+Uvicorn khi nhận SIGTERM: ngừng nhận kết nối mới, đợi các request đang xử lý xong, sau đó chạy phần `yield` → cleanup → exit 0. Không mất request trong flight.
+
+###  Exercise 5.3 — Stateless Design
+
+`app.py` lưu session vào Redis (`setex`) thay vì dict trong memory:
+```python
+def save_session(session_id, data, ttl=3600):
+    _redis.setex(f"session:{session_id}", ttl, json.dumps(data))
+
+def load_session(session_id):
+    data = _redis.get(f"session:{session_id}")
+    return json.loads(data) if data else {}
+```
+Kết quả: bất kỳ instance nào nhận request cũng đọc được session từ Redis. Nếu instance die, Redis vẫn còn dữ liệu.
+
+###  Exercise 5.4 — Load Balancing
+
+```bash
+docker compose up -d --build --scale agent=3
+```
+
+Stack khởi động theo thứ tự:
+1. Redis healthy
+2. 3 agent instances start (depends_on redis)
+3. Nginx start (depends_on agent)
+
+Nginx `nginx.conf` dùng `upstream agent { server agent:8000; }` — Docker Compose DNS tự round-robin 3 IP của service `agent`.
+
+###  Exercise 5.5 — Test Stateless
+
+**Kết quả `python test_stateless.py` (2026-06-12):**
+```
+Session ID: 2492d17d-e32b-4758-83ec-53959e36dc72
+
+Request 1: [instance-34b2fb]   Q: What is Docker?
+Request 2: [instance-3af854]   Q: Why do we need containers?
+Request 3: [instance-3a26c4]   Q: What is Kubernetes?
+Request 4: [instance-34b2fb]   Q: How does load balancing work?
+Request 5: [instance-3af854]   Q: What is Redis used for?
+
+Instances used: {instance-34b2fb, instance-3af854, instance-3a26c4}
+✅ All requests served despite different instances!
+Total messages in history: 10 (5 user + 5 assistant)
+✅ Session history preserved across all instances via Redis!
+```
+
+**Demo graceful shutdown (kill 1 instance):**
+```
+docker stop production-agent-1
+# agent-2 và agent-3 vẫn healthy
+# 3 requests tiếp → chỉ thấy instance-34b2fb và instance-3a26c4
+# Zero errors — nginx tự loại agent-1 khỏi upstream
+```
+
 ###  Checkpoint 5
 
-- [ ] Implement health và readiness checks
-- [ ] Implement graceful shutdown
-- [ ] Refactor code thành stateless
-- [ ] Hiểu load balancing với Nginx
-- [ ] Test stateless design
+- [x] Implement health và readiness checks — `/health` (liveness, luôn 200 nếu process alive) + `/ready` (readiness, check Redis ping → 503 nếu Redis down); đã test trên cả develop và production Docker stack
+- [x] Implement graceful shutdown — dùng FastAPI lifespan asynccontextmanager: sau SIGTERM, uvicorn chờ request in-flight xong rồi chạy cleanup block; production image không cần signal.signal() vì uvicorn tích hợp sẵn
+- [x] Refactor code thành stateless — session lưu Redis với TTL 3600s (`setex`), fallback in-memory nếu Redis không có; 5 request từ 3 instance khác nhau dùng cùng 1 session_id → history liên tục ✅
+- [x] Hiểu load balancing với Nginx — `docker compose up --scale agent=3` → 3 containers; nginx upstream round-robin qua Docker DNS; kill 1 instance → 2 còn lại nhận traffic mà không báo lỗi
+- [x] Test stateless design — `test_stateless.py`: 5 requests → 3 instance IDs khác nhau, lịch sử 10 messages đúng thứ tự, storage="redis" ✅
+
+> **Ghi chú khi thực hành (2026-06-12):**
+> - Bug lab: `app.py` line 220 có `uvicorn.run(app, ..., reload=True)` — khi pass object (không phải import string), uvicorn warning rồi exit code 1 → container restart loop. Fix: đổi thành `uvicorn.run("app:app", host="0.0.0.0", port=port)`.
+> - Bug lab: `05-scaling-reliability/production/requirements.txt` thiếu trong repo → đã tạo (fastapi, uvicorn, redis, pydantic).
+> - Bug lab: `05-scaling-reliability/production/Dockerfile` thiếu → đã tạo (build context = repo root vì COPY theo đường dẫn tương đối từ root).
+> - Bug lab: `docker-compose.yml` trỏ Dockerfile vào folder `advanced/` không tồn tại → đã sửa sang `production/Dockerfile`.
+> - ECR Public mirrors dùng cho redis và nginx để tránh Docker Hub rate limit (như Part 2).
+> - `deploy.replicas: 3` trong compose file override `--scale agent=3` từ CLI — dùng một trong hai, không cần cả hai.
 
 ---
 
