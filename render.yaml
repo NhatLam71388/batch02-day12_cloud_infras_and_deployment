@@ -49,6 +49,7 @@ services:
     name: agent-cache
     plan: free
     maxmemoryPolicy: allkeys-lru
+    ipAllowList: []   # rỗng = chỉ service nội bộ Render kết nối được (bắt buộc theo spec mới)
 
 # ============================================================
 # Cách deploy:
