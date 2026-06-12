@@ -105,17 +105,24 @@ python app.py
 
 | Feature | Basic | Advanced | Tại sao quan trọng? |
 |---------|-------|----------|---------------------|
-| Config | Hardcode | Env vars | ... |
-| Health check |  |  | ... |
-| Logging | print() | JSON | ... |
-| Shutdown | Đột ngột | Graceful | ... |
+| Config | Hardcode | Env vars | Secret hardcode sẽ lộ ngay khi push lên GitHub và không rotate được. Env vars cho phép đổi config giữa dev/prod mà không sửa code (đã kiểm chứng: đổi `PORT=8001` chỉ bằng env var). |
+| Health check | ❌ (404) | ✅ `/health` + `/ready` | Cloud platform gọi `/health` định kỳ — nếu non-200 thì restart container. Load balancer dùng `/ready` để quyết định có route traffic vào instance không. |
+| Logging | print() | JSON | `print()` không có level/timestamp và bản basic còn in cả API key ra log. JSON structured log parse được bởi log aggregator (Datadog, Loki) để search/alert. |
+| Shutdown | Đột ngột | Graceful | Khi deploy bản mới, platform gửi SIGTERM. Graceful shutdown cho request đang chạy hoàn thành trước khi tắt — user không bị đứt kết nối giữa chừng. |
+| Binding | `localhost` | `0.0.0.0` | Trong container, bind `localhost` thì chỉ nhận kết nối nội bộ container — bên ngoài không gọi được. `0.0.0.0` nhận kết nối từ mọi interface. |
 
 ###  Checkpoint 1
 
-- [ ] Hiểu tại sao hardcode secrets là nguy hiểm
-- [ ] Biết cách dùng environment variables
-- [ ] Hiểu vai trò của health check endpoint
-- [ ] Biết graceful shutdown là gì
+- [x] Hiểu tại sao hardcode secrets là nguy hiểm — lộ qua Git, lộ qua log (bản basic in `sk-hardcoded-fake-key...` ra console), không rotate được
+- [x] Biết cách dùng environment variables — `os.getenv()` trong `config.py`, set qua `.env` / `$env:PORT` / platform dashboard
+- [x] Hiểu vai trò của health check endpoint — đã test: basic trả 404, advanced trả 200 kèm uptime; platform dựa vào đây để restart
+- [x] Biết graceful shutdown là gì — lifespan handler + SIGTERM: ngừng nhận request mới, hoàn thành request đang chạy, đóng connection rồi mới exit
+
+> **Ghi chú khi thực hành (Windows, 2026-06-12):**
+> - Lỗi `pip: from versions: none` do pip cũ trong venv (22.3.1) — fix: `python -m pip install --upgrade pip` trước khi cài requirements.
+> - Port 8000 bị app khác chiếm trên IPv6 → gọi `127.0.0.1:8000` thay vì `localhost:8000`, hoặc đổi `PORT` qua env var.
+> - Bug lab: `production/` có `python-dotenv` trong requirements nhưng không gọi `load_dotenv()` → file `.env` không được đọc, app chạy bằng default trong `config.py`.
+> - Bug lab: JSON log format trong `app.py` không có hiệu lực vì `config.py` gọi `logging.warning()` lúc import làm root logger khởi tạo trước — fix: thêm `force=True` vào `logging.basicConfig(...)`.
 
 ---
 
@@ -146,6 +153,13 @@ cd ../../02-docker/develop
 3. Tại sao COPY requirements.txt trước?
 4. CMD vs ENTRYPOINT khác nhau thế nào?
 
+**Trả lời:**
+
+1. **Base image:** `python:3.11` — bản full distribution (~1GB), chứa cả compiler và nhiều tool không cần lúc chạy.
+2. **Working directory:** `/app` — mọi lệnh COPY/RUN/CMD phía sau đều thực thi từ thư mục này trong container.
+3. **COPY requirements.txt trước vì Docker layer cache:** mỗi lệnh tạo 1 layer, layer chỉ bị build lại khi input của nó thay đổi. Code sửa thường xuyên, requirements ít đổi — tách riêng thì khi sửa code, bước `pip install` (chậm nhất) được lấy từ cache thay vì chạy lại.
+4. **CMD vs ENTRYPOINT:** `CMD` là lệnh mặc định, bị ghi đè hoàn toàn khi chạy `docker run image <lệnh khác>`. `ENTRYPOINT` cố định, tham số khi run được **nối thêm** vào sau. Pattern phổ biến: ENTRYPOINT là chương trình chính, CMD là tham số mặc định.
+
 ###  Exercise 2.2: Build và run
 
 ```bash
@@ -166,6 +180,8 @@ curl http://localhost:8000/ask -X POST \
 docker images my-agent:develop
 ```
 
+**Kết quả đo thực tế (2026-06-12):** `my-agent:develop` = **1.66GB** — cho một app FastAPI chưa đến 40 dòng code! Gần như toàn bộ là base image `python:3.11` full. Container chạy OK: `/health` trả `{"status":"ok","container":true}`, `/ask` trả lời được.
+
 ###  Exercise 2.3: Multi-stage build
 
 ```bash
@@ -177,10 +193,22 @@ cd ../production
 - Stage 2 làm gì?
 - Tại sao image nhỏ hơn?
 
+**Trả lời:**
+
+- **Stage 1 (builder):** dùng `python:3.11-slim` + cài `gcc`, `libpq-dev` để compile dependencies, rồi `pip install --user` (gói vào `/root/.local` cho dễ copy). Stage này KHÔNG được deploy.
+- **Stage 2 (runtime):** bắt đầu lại từ `python:3.11-slim` sạch, chỉ `COPY --from=builder /root/.local` (packages đã cài) + source code. Thêm 2 best practice: tạo **non-root user** `appuser` (container bị xâm nhập thì attacker không có quyền root) và **HEALTHCHECK** ngay trong image.
+- **Tại sao nhỏ hơn:** image cuối chỉ chứa stage 2 — toàn bộ gcc, apt cache, build tools của stage 1 bị bỏ lại. Đo thực tế: **develop 1.66GB → production 236MB, nhỏ hơn 7 lần**.
+
 Build và so sánh:
 ```bash
 docker build -t my-agent:advanced .
 docker images | grep my-agent
+```
+
+**Kết quả đo thực tế (2026-06-12):**
+```
+my-agent   production   236MB    ← multi-stage, python:3.11-slim
+my-agent   develop      1.66GB   ← single-stage, python:3.11 full
 ```
 
 ###  Exercise 2.4: Docker Compose stack
@@ -192,6 +220,32 @@ docker compose up
 ```
 
 Services nào được start? Chúng communicate thế nào?
+
+**Trả lời — Architecture diagram:**
+
+```
+            Internet
+               │
+        ┌──────▼──────┐
+        │    nginx    │  ← service DUY NHẤT publish port (80/443)
+        │  (LB/proxy) │     rate limit 10 req/s/IP, security headers
+        └──────┬──────┘
+               │ proxy_pass → agent:8000
+        ┌──────▼──────┐
+        │    agent    │  ← FastAPI, không publish port,
+        │  (FastAPI)  │     chỉ nghe trong network "internal"
+        └──────┬──────┘
+               │ redis://redis:6379
+        ┌──────▼──────┐
+        │    redis    │  ← cache/session, volume redis_data
+        └─────────────┘
+   (qdrant: vector DB cho RAG — có trong file gốc,
+    agent bài này chưa dùng đến)
+```
+
+**Services start:** nginx, agent, redis (theo thứ tự dependency: redis healthy trước → agent start → nginx). **Communicate qua Docker DNS:** mỗi service gọi nhau bằng **tên service** (`redis://redis:6379`, `proxy_pass http://agent:8000`) trong network `internal` — không hardcode IP. Chỉ nginx chạm được từ bên ngoài.
+
+**Kết quả test thực tế (2026-06-12):** `curl http://localhost/health` qua nginx → 200; gọi thẳng agent port 8000 → không vào được (network isolation đúng thiết kế); bắn 60 request song song → 49×200 + 11×429 (nginx rate limit 10r/s + burst 20 hoạt động).
 
 Test:
 ```bash
@@ -206,10 +260,19 @@ curl http://localhost/ask -X POST \
 
 ###  Checkpoint 2
 
-- [ ] Hiểu cấu trúc Dockerfile
-- [ ] Biết lợi ích của multi-stage builds
-- [ ] Hiểu Docker Compose orchestration
-- [ ] Biết cách debug container (`docker logs`, `docker exec`)
+- [x] Hiểu cấu trúc Dockerfile — base image `python:3.11`, WORKDIR `/app`, COPY requirements trước để tận dụng layer cache, CMD là lệnh mặc định (ghi đè được) còn ENTRYPOINT cố định
+- [x] Biết lợi ích của multi-stage builds — đo thực tế: develop (single-stage, python:3.11 full) = **1.66GB**, production (multi-stage, python:3.11-slim) = **236MB**, nhỏ hơn 7 lần; runtime stage còn chạy non-root user
+- [x] Hiểu Docker Compose orchestration — đã chạy stack nginx + agent + redis: service discovery qua tên (`redis://redis:6379`), `depends_on` + healthcheck, network isolation (agent không publish port, chỉ qua nginx); rate limit nginx hoạt động: 60 request song song → 49×200 + 11×429
+- [x] Biết cách debug container — `docker compose logs agent --tail 5` (thấy JSON log), `docker compose ps` (thấy trạng thái healthy), `docker exec -it <id> /bin/sh`
+
+> **Ghi chú khi thực hành (Windows, 2026-06-12):**
+> - Bug lab: `02-docker/production/requirements.txt` không tồn tại trong repo nhưng Dockerfile COPY nó → đã tạo file (fastapi + uvicorn pin giống develop).
+> - Bug lab: `docker-compose.yml` đặt `context: .` nhưng Dockerfile COPY theo đường dẫn từ gốc repo → đã sửa thành `context: ../..`.
+> - Bug lab: healthcheck qdrant dùng `curl` nhưng image qdrant không có curl → agent (depends_on healthy) sẽ không bao giờ start; đã đổi sang bash TCP check.
+> - `env_file: .env.local` bắt buộc phải tồn tại → đã tạo file rỗng.
+> - Docker Hub rate limit khi pull ẩn danh → đổi redis/nginx sang mirror `public.ecr.aws/docker/library/...`; qdrant tạm comment out (agent không dùng đến).
+> - pip trong build bị timeout do mạng → thêm `--timeout 120 --retries 10` vào lệnh pip trong Dockerfile.
+> - Test rate limit phải bắn request **song song** (`xargs -P 10`); curl tuần tự không đủ 10 req/s nên không thấy 429.
 
 ---
 
@@ -281,6 +344,11 @@ curl http://studen-agent-domain/ask -X POST \
   -d '{"question": ""}'
 ```
 
+**Kết quả deploy thực tế (2026-06-12):**
+- Project: `day12-ai-agent` — Public URL: **https://day12-ai-agent-production-15c8.up.railway.app**
+- `GET /health` → 200 `{"status":"ok","platform":"Railway"}`; `POST /ask` → trả lời qua Internet OK; `/docs` mở được Swagger UI.
+- Lưu ý thực tế: (1) đăng nhập website railway.com chưa đủ — CLI cần `railway login` riêng (có chế độ `--browserless` in link xác nhận); (2) khi project có nhiều service, `railway up` cần thêm `--service <tên>`; (3) endpoint `/ask` gốc dùng `request: Request` thô nên Swagger không hiện ô nhập body — đã refactor sang Pydantic `BaseModel`, redeploy ~40s là live, không downtime.
+
 ###  Exercise 3.2: Deploy Render (15 phút)
 
 ```bash
@@ -299,6 +367,8 @@ cd ../render
 
 **Nhiệm vụ:** So sánh `render.yaml` với `railway.toml`. Khác nhau gì?
 
+**Trả lời:** Khác biệt cốt lõi là **triết lý**: `railway.toml` chỉ mô tả *cách chạy 1 service* (builder Nixpacks tự detect, startCommand, healthcheck) — env vars set ngoài file qua CLI/dashboard, deploy chủ động bằng `railway up`. `render.yaml` là **Infrastructure as Code** trọn vẹn: khai báo nhiều service trong 1 file (web + redis add-on), region, plan, env vars ngay trong file (`sync: false` = secret nhập tay trên dashboard, `generateValue: true` = tự sinh), và `autoDeploy: true` — cứ push GitHub là tự deploy theo Git-flow.
+
 ###  Exercise 3.3: (Optional) GCP Cloud Run (15 phút)
 
 ```bash
@@ -309,12 +379,32 @@ cd ../production-cloud-run
 
 **Nhiệm vụ:** Đọc `cloudbuild.yaml` và `service.yaml`. Hiểu CI/CD pipeline.
 
+**Trả lời:**
+
+- **`cloudbuild.yaml`** — pipeline 4 bước nối bằng `waitFor`: **test** (pytest, fail là dừng — code lỗi không bao giờ lên production) → **build** (Docker, tag bằng `$COMMIT_SHA` để rollback chính xác theo commit + tag `latest`; `--cache-from` tận dụng layer cache) → **push** (lên Container Registry) → **deploy** (Cloud Run: `min-instances=1` chống cold start, `max-instances=10` chặn scale vô hạn, secrets từ **Secret Manager** chứ không nằm trong file).
+- **`service.yaml`** — định nghĩa service dạng Knative (IaC): autoscale 1–10 instance, mỗi instance chịu 80 request đồng thời (`containerConcurrency`), giới hạn tài nguyên CPU/memory, **livenessProbe** gọi `/health` (sống không?) và **startupProbe** gọi `/ready` (sẵn sàng nhận traffic chưa?) — đúng 2 endpoint đã học ở Part 1.
+- **Bức tranh CI/CD:** push code lên main → Cloud Build tự chạy 4 bước trên → bản mới live không cần thao tác tay. So với Railway (`railway up` thủ công) đây là mức tự động hóa cao hơn, đổi lại setup phức tạp hơn.
+
 ###  Checkpoint 3
 
-- [ ] Deploy thành công lên ít nhất 1 platform
-- [ ] Có public URL hoạt động
-- [ ] Hiểu cách set environment variables trên cloud
-- [ ] Biết cách xem logs
+- [x] Deploy thành công lên ít nhất 1 platform — Railway, project `day12-ai-agent`, deploy 2026-06-12 qua `railway init` → `railway up` → `railway domain`
+- [x] Có public URL hoạt động — https://day12-ai-agent-production-15c8.up.railway.app (đã test `/`, `/health`, `/ask` qua Internet, tất cả 200)
+- [x] Hiểu cách set environment variables trên cloud — Railway: `railway variables set KEY=value`; Render: dashboard hoặc `envVars` trong render.yaml (`sync: false` = nhập tay, `generateValue: true` = tự sinh); Cloud Run: `--set-env-vars` / `--set-secrets` từ Secret Manager
+- [x] Biết cách xem logs — Railway: `railway logs`; Render: tab Logs trên dashboard; Cloud Run: `gcloud run services logs read ai-agent`
+
+**So sánh render.yaml vs railway.toml (Exercise 3.2):**
+
+| | `railway.toml` | `render.yaml` |
+|---|---|---|
+| Phạm vi | Chỉ config **cách chạy** 1 service (build + deploy) | **Infrastructure as Code đầy đủ**: khai báo nhiều service (web + redis), plan, region |
+| Build | `builder = "NIXPACKS"` (tự detect ngôn ngữ) | `buildCommand` tường minh |
+| Env vars | KHÔNG khai báo trong file — set qua CLI/dashboard | Khai báo ngay trong file, có `sync: false` và `generateValue` |
+| Health check | `healthcheckPath = "/health"` | `healthCheckPath: /health` (tương đương) |
+| Trigger deploy | `railway up` (đẩy code từ máy) | `autoDeploy: true` — push GitHub là tự deploy |
+
+**CI/CD pipeline Cloud Run (Exercise 3.3):** `cloudbuild.yaml` chạy 4 bước nối nhau bằng `waitFor`: **test** (pytest) → **build** (docker, có `--cache-from` để tận dụng layer cache) → **push** (lên registry, tag bằng `$COMMIT_SHA` để rollback được theo commit) → **deploy** (Cloud Run với `min-instances=1` chống cold start, secrets lấy từ Secret Manager). `service.yaml` là bản khai báo Knative của service: scaling 1–10 instances, mỗi instance nhận 80 request đồng thời, liveness probe `/health` + startup probe `/ready`.
+
+> **Ghi chú khi thực hành (2026-06-12):** App `railway/app.py` đã được kiểm chứng local: đọc `PORT` từ env var (test với PORT=8003), `/health` và `/ask` hoạt động — sẵn sàng deploy. README nhắc đến `Procfile` nhưng repo không có — không sao, `startCommand` trong railway.toml thay thế được. Deploy thật cần login browser nên thực hiện thủ công theo các lệnh trong mục Exercise 3.1.
 
 ---
 
