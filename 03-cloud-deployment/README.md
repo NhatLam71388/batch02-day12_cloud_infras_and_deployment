@@ -60,3 +60,11 @@ production-cloud-run/
 1. Tại sao serverless (Lambda) không phải lúc nào cũng tốt cho AI agent?
 2. "Cold start" là gì? Ảnh hưởng thế nào đến UX?
 3. Khi nào nên upgrade từ Railway lên Cloud Run?
+
+### Trả lời (thực hành 2026-06-12)
+
+1. **Serverless không phải lúc nào cũng hợp với AI agent vì:** (a) Lambda có timeout cứng (15 phút max, API Gateway 29s) trong khi LLM call + agent loop có thể chạy lâu; (b) agent thường cần giữ kết nối streaming — mô hình request/response ngắn của serverless không khớp; (c) cold start của serverless cộng thêm thời gian load model/khởi tạo connection làm độ trễ tệ hơn; (d) chi phí theo invocation có thể đắt hơn container chạy nền khi traffic đều.
+
+2. **Cold start** là độ trễ khi platform phải khởi động instance mới từ 0 (kéo image, start process, init app) vì không có instance nào đang chạy. Trải nghiệm thực tế ngay trong lab này: Render free tier cho app ngủ sau 15 phút — request đầu tiên sau đó mất ~30s mới có phản hồi, user tưởng app chết. Cách chữa: giữ tối thiểu 1 instance luôn thức (`min-instances=1` trong cloudbuild.yaml của Cloud Run — đánh đổi bằng tiền).
+
+3. **Upgrade từ Railway lên Cloud Run khi:** cần auto-scale theo traffic thật (Cloud Run scale 0→N theo request, cấu hình `containerConcurrency`); cần CI/CD đầy đủ (test trước khi deploy — cloudbuild.yaml); cần secrets management chuẩn (Secret Manager thay vì env vars); cần SLA/compliance cho khách hàng doanh nghiệp; hoặc chi phí Railway vượt ~$20-50/tháng — lúc đó pay-per-use của Cloud Run thường rẻ hơn. Còn làm MVP/demo/đồ án thì Railway/Render đủ và nhanh hơn nhiều.

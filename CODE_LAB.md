@@ -365,6 +365,15 @@ cd ../render
 6. Set environment variables trong dashboard
 7. Deploy!
 
+**Kết quả deploy thực tế (2026-06-12):** ✅ Deploy thành công qua Blueprint từ repo `NhatLam71388/batch02-day12_cloud_infras_and_deployment` (commit `d943e93`). Render tạo đúng 2 service theo render.yaml: web service `ai-agent` (Python, Singapore, free) + Key Value `agent-cache`.
+
+Các vấn đề gặp và cách xử lý:
+- Repo gốc **thiếu app code** trong thư mục `render/` (chỉ có render.yaml) → đã tạo `app.py` (bản Pydantic), `requirements.txt`, `utils/mock_llm.py`.
+- Blueprint chỉ đọc `render.yaml` ở **gốc repo** → copy file ra gốc + thêm `rootDir: 03-cloud-deployment/render` để trỏ vào thư mục con.
+- Lỗi validate `services[1] must specify IP allow list`: spec mới của Render bắt buộc Redis/Key Value khai báo `ipAllowList` → thêm `ipAllowList: []` (rỗng = chỉ service nội bộ kết nối được, đúng least privilege).
+- Blueprint của Render là **GitOps**: sửa render.yaml → push → Render tự sync (màn hình Blueprint hiện đúng commit hash) — khác hẳn Railway nơi deploy bằng lệnh `railway up` từ máy.
+- Lưu ý free tier: app **ngủ sau 15 phút** không có traffic, request đầu sau đó chậm ~30s (cold start) — trade-off so với Railway.
+
 **Nhiệm vụ:** So sánh `render.yaml` với `railway.toml`. Khác nhau gì?
 
 **Trả lời:** Khác biệt cốt lõi là **triết lý**: `railway.toml` chỉ mô tả *cách chạy 1 service* (builder Nixpacks tự detect, startCommand, healthcheck) — env vars set ngoài file qua CLI/dashboard, deploy chủ động bằng `railway up`. `render.yaml` là **Infrastructure as Code** trọn vẹn: khai báo nhiều service trong 1 file (web + redis add-on), region, plan, env vars ngay trong file (`sync: false` = secret nhập tay trên dashboard, `generateValue: true` = tự sinh), và `autoDeploy: true` — cứ push GitHub là tự deploy theo Git-flow.
