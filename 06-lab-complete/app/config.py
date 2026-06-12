@@ -13,23 +13,24 @@ class Settings:
     debug: bool = field(default_factory=lambda: os.getenv("DEBUG", "false").lower() == "true")
 
     # App
-    app_name: str = field(default_factory=lambda: os.getenv("APP_NAME", "Production AI Agent"))
-    app_version: str = field(default_factory=lambda: os.getenv("APP_VERSION", "1.0.0"))
+    app_name: str = field(default_factory=lambda: os.getenv("APP_NAME", "E-commerce AI Agent"))
+    app_version: str = field(default_factory=lambda: os.getenv("APP_VERSION", "2.0.0"))
 
-    # LLM
-    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    # LLM — hỗ trợ OpenAI và Gemini
+    default_provider: str = field(default_factory=lambda: os.getenv("DEFAULT_PROVIDER", "openai"))
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o-mini"))
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
 
     # Security
     agent_api_key: str = field(default_factory=lambda: os.getenv("AGENT_API_KEY", "dev-key-change-me"))
-    jwt_secret: str = field(default_factory=lambda: os.getenv("JWT_SECRET", "dev-jwt-secret"))
     allowed_origins: list = field(
         default_factory=lambda: os.getenv("ALLOWED_ORIGINS", "*").split(",")
     )
 
     # Rate limiting
     rate_limit_per_minute: int = field(
-        default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
+        default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
     )
 
     # Budget
@@ -41,14 +42,12 @@ class Settings:
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
 
     def validate(self):
-        logger = logging.getLogger(__name__)
+        _log = logging.getLogger(__name__)
         if self.environment == "production":
             if self.agent_api_key == "dev-key-change-me":
                 raise ValueError("AGENT_API_KEY must be set in production!")
-            if self.jwt_secret == "dev-jwt-secret":
-                raise ValueError("JWT_SECRET must be set in production!")
-        if not self.openai_api_key:
-            logger.warning("OPENAI_API_KEY not set — using mock LLM")
+        if not self.openai_api_key and not self.gemini_api_key:
+            _log.warning("No LLM API key set — agent sẽ raise lỗi khi gọi. Set OPENAI_API_KEY hoặc GEMINI_API_KEY.")
         return self
 
 

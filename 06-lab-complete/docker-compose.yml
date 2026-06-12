@@ -1,16 +1,24 @@
-version: "3.9"
+# ============================================================
+# Part 6 — Production Stack
+# Chạy: docker compose up --build
+# Test: curl http://localhost:8000/health
+# UI  : http://localhost:8000/
+# ============================================================
 
 services:
+
   agent:
     build: .
     ports:
       - "8000:8000"
     environment:
       - ENVIRONMENT=staging
-      - APP_NAME=Production AI Agent
+      - APP_NAME=E-commerce AI Agent
       - REDIS_URL=redis://redis:6379/0
+      - RATE_LIMIT_PER_MINUTE=10
+      - DAILY_BUDGET_USD=5.0
     env_file:
-      - .env.local
+      - .env.local        # OPENAI_API_KEY, GEMINI_API_KEY, AGENT_API_KEY
     depends_on:
       redis:
         condition: service_healthy
@@ -20,14 +28,16 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 20s
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    # ECR Public mirror — tránh Docker Hub rate limit
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
+    restart: unless-stopped

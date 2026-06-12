@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-commerce Chatbot vs ReAct Agent | Mind Inspector</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="glass-bg-blur"></div>
+    <div class="glass-bg-blur glow-2"></div>
+    
+    <div class="app-container">
+        <!-- Main Header -->
+        <header class="app-header">
+            <div class="logo">
+                <i class="fa-solid fa-brain glow-text"></i>
+                <div class="logo-text">
+                    <h1>E-COMMERCE AGENT STUDIO</h1>
+                    <p>Chatbot Baseline vs. ReAct Reasoning Agent</p>
+                </div>
+            </div>
+            <div class="status-indicator">
+                <span class="status-dot pulsing"></span>
+                <span class="status-label">System Active</span>
+            </div>
+        </header>
+
+        <!-- Main Body Grid -->
+        <main class="app-main">
+            <!-- Left Column: Controller & Chat -->
+            <section class="left-panel">
+                <!-- Config Section -->
+                <div class="panel-card config-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-sliders text-cyan"></i>
+                        <h2>Model Configuration</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="grid-2">
+                            <!-- Mode -->
+                            <div class="form-group">
+                                <label for="run-mode"><i class="fa-solid fa-gears"></i> Mode</label>
+                                <div class="segmented-control">
+                                    <input type="radio" id="mode-chatbot" name="mode" value="chatbot" checked>
+                                    <label for="mode-chatbot" class="segment-label">
+                                        <i class="fa-solid fa-comment-dots"></i> Chatbot
+                                    </label>
+                                    <input type="radio" id="mode-agent" name="mode" value="agent">
+                                    <label for="mode-agent" class="segment-label">
+                                        <i class="fa-solid fa-robot"></i> ReAct Agent
+                                    </label>
+                                </div>
+                            </div>
+                            <!-- Provider -->
+                            <div class="form-group">
+                                <label for="llm-provider"><i class="fa-solid fa-server"></i> Provider</label>
+                                <select id="llm-provider" class="custom-select">
+                                    <option value="openai">OpenAI</option>
+                                    <option value="google">Google Gemini</option>
+                                    <option value="local">Local (llama-cpp)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="grid-2 mt-3">
+                            <!-- Model Select -->
+                            <div class="form-group">
+                                <label for="llm-model"><i class="fa-solid fa-microchip"></i> Model</label>
+                                <select id="llm-model" class="custom-select">
+                                    <!-- Options will be dynamically populated -->
+                                </select>
+                            </div>
+                            <!-- API Key Input -->
+                            <div class="form-group" id="api-key-group">
+                                <label for="api-key"><i class="fa-solid fa-key"></i> Custom API Key (Optional)</label>
+                                <div class="input-with-icon">
+                                    <i class="fa-solid fa-eye-slash toggle-key-visibility" id="toggle-key"></i>
+                                    <input type="password" id="api-key" placeholder="Defaults to .env config" class="custom-input">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Room Panel -->
+                <div class="panel-card chat-card flex-grow">
+                    <div class="card-header chat-header">
+                        <div class="chat-header-info">
+                            <i class="fa-solid fa-message text-purple"></i>
+                            <h2>Customer Conversation</h2>
+                        </div>
+                        <button id="clear-chat" class="btn btn-icon-only" title="Clear chat history">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Messages Area -->
+                    <div class="chat-viewport" id="chat-messages">
+                        <!-- Welcome message -->
+                        <div class="message system-msg">
+                            <div class="msg-avatar"><i class="fa-solid fa-circle-info"></i></div>
+                            <div class="msg-content">
+                                <p><strong>Welcome to the E-commerce AI Studio!</strong></p>
+                                <p>Compare the response strategy of a standard <strong>Baseline Chatbot</strong> vs a reasoning-based <strong>ReAct Agent</strong>. The ReAct Agent will call external tools automatically to fetch live stock, discounts, and shipping cost estimates to avoid hallucinations.</p>
+                                <p>Select your mode, configure LLM parameters, and type your message or select one of the quick test scenarios below.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Suggestions -->
+                    <div class="quick-suggestions-container">
+                        <span class="suggestion-label"><i class="fa-solid fa-bolt"></i> Quick Scenarios:</span>
+                        <div class="suggestions-list">
+                            <button class="suggest-chip" data-query="Is iPhone 15 in stock? If yes, calculate shipping to Hanoi for 1.5kg.">
+                                stock + Hanoi ship
+                            </button>
+                            <button class="suggest-chip" data-query="Check if MacBook M3 is in stock and apply coupon WINNER.">
+                                stock + discount WINNER
+                            </button>
+                            <button class="suggest-chip" data-query="Calculate shipping cost for a 3kg package to Ho Chi Minh.">
+                                3kg shipping to HCM
+                            </button>
+                            <button class="suggest-chip" data-query="Is iPad Air in stock? Apply coupon WELCOME and calculate shipping to Da Nang (weight 2kg).">
+                                iPad + WELCOME + Da Nang
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Input Area -->
+                    <div class="chat-input-area">
+                        <textarea id="chat-input" placeholder="Type your e-commerce inquiry here... (Ctrl+Enter to send)" rows="1"></textarea>
+                        <button id="send-btn" class="btn btn-primary">
+                            <span>Send</span>
+                            <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Column: Telemetry & Mind Inspector -->
+            <section class="right-panel">
+                <!-- Telemetry Cards -->
+                <div class="panel-card telemetry-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-chart-line text-green"></i>
+                        <h2>Real-time Telemetry</h2>
+                    </div>
+                    <div class="card-body telemetry-grid">
+                        <div class="metric-box">
+                            <div class="metric-label"><i class="fa-solid fa-clock"></i> Latency</div>
+                            <div class="metric-value text-cyan" id="metric-latency">0<span class="metric-unit">ms</span></div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label"><i class="fa-solid fa-coins"></i> Estimated Cost</div>
+                            <div class="metric-value text-green" id="metric-cost">$0.000000</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-label"><i class="fa-solid fa-ticket"></i> Total Tokens</div>
+                            <div class="metric-value text-purple" id="metric-tokens">0</div>
+                            <div class="metric-sub" id="metric-token-split">0 In / 0 Out</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mind Inspector (ReAct Steps) -->
+                <div class="panel-card inspector-card flex-grow">
+                    <div class="card-header">
+                        <div class="header-title-container">
+                            <i class="fa-solid fa-microscope text-orange"></i>
+                            <h2>Mind Inspector (ReAct Steps)</h2>
+                        </div>
+                        <div class="step-counter" id="step-counter-badge">0 steps</div>
+                    </div>
+                    <div class="card-body inspector-viewport" id="inspector-viewport">
+                        <div class="no-steps-placeholder" id="steps-placeholder">
+                            <i class="fa-solid fa-network-wired"></i>
+                            <p>Agent steps will appear here in real-time during execution.</p>
+                            <span class="placeholder-tip">Choose "ReAct Agent" mode to see step-by-step reasoning.</span>
+                        </div>
+                        
+                        <div class="steps-timeline" id="steps-timeline" style="display: none;">
+                            <!-- Steps will be generated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual Benchmark Comparison Chart -->
+                <div class="panel-card chart-card-panel">
+                    <div class="card-header">
+                        <i class="fa-solid fa-chart-bar text-pink"></i>
+                        <h2>Telemetry Comparison (Chatbot vs ReAct Agent)</h2>
+                    </div>
+                    <div class="card-body chart-body">
+                        <canvas id="telemetryChart" height="120"></canvas>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast" id="error-toast">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <div class="toast-content">
+            <span class="toast-title">Error Occurred</span>
+            <span class="toast-message" id="error-toast-message">Failed to load resource.</span>
+        </div>
+        <button class="toast-close" id="close-toast">&times;</button>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
