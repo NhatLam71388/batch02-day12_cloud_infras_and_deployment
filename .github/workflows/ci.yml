@@ -1,0 +1,25 @@
+name: Production Readiness CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  readiness-check:
+    name: Run Production Readiness Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run checker script
+        run: |
+          python 06-lab-complete/check_production_ready.py
